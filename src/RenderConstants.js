@@ -16,13 +16,13 @@ module.exports = {
      * Going above this may cause middleware warnings or a performance penalty but should otherwise behave correctly.
      * @const {int}
      */
-    SKIN_SHARE_SOFT_LIMIT: 300,
+    SKIN_SHARE_SOFT_LIMIT: 301,
 
     /**
      * @enum {string}
      */
     Events: {
-         /**
+        /**
          * NativeSizeChanged event
          *
          * @event RenderWebGL#event:NativeSizeChanged

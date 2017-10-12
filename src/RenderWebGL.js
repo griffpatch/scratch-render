@@ -5,10 +5,12 @@ const twgl = require('twgl.js');
 
 const BitmapSkin = require('./BitmapSkin');
 const Drawable = require('./Drawable');
+const Rectangle = require('./Rectangle');
 const PenSkin = require('./PenSkin');
 const RenderConstants = require('./RenderConstants');
 const ShaderManager = require('./ShaderManager');
 const SVGSkin = require('./SVGSkin');
+const SVGTextBubble = require('./util/svg-text-bubble');
 
 /**
  * @callback RenderWebGL#idFilterFunc
@@ -29,10 +31,15 @@ const MAX_TOUCH_SIZE = [3, 3];
  * target is touching a color whose components are each within this tolerance of
  * the corresponding component of the query color.
  * between 0 (exact matches only) and 255 (match anything).
- * @type {int}
+ * @type {object.<string,int>}
  * @memberof RenderWebGL
  */
-const TOLERANCE_TOUCHING_COLOR = 2;
+const TOLERANCE_TOUCHING_COLOR = {
+    R: 7,
+    G: 7,
+    B: 15,
+    Mask: 2
+};
 
 /**
  * Sprite Fencing - The number of pixels a sprite is required to leave remaining
@@ -88,6 +95,8 @@ class RenderWebGL extends EventEmitter {
 
         /** @type {HTMLCanvasElement} */
         this._tempCanvas = document.createElement('canvas');
+
+        this._svgTextBubble = new SVGTextBubble();
 
         this._createGeometry();
 
@@ -221,6 +230,59 @@ class RenderWebGL extends EventEmitter {
         this._allSkins[skinId] = newSkin;
         return skinId;
     }
+
+    /**
+     * Create a new SVG skin using the text bubble svg creator. The rotation center
+     * is always placed at the top left.
+     * @param {!string} type - either "say" or "think".
+     * @param {!string} text - the text for the bubble.
+     * @param {!boolean} pointsLeft - which side the bubble is pointing.
+     * @returns {!int} the ID for the new skin.
+     */
+    createTextSkin (type, text, pointsLeft) {
+        const bubbleSvg = this._svgTextBubble.buildString(type, text, pointsLeft);
+        return this.createSVGSkin(bubbleSvg, [0, 0]);
+    }
+
+    /**
+     * Update an existing SVG skin, or create an SVG skin if the previous skin was not SVG.
+     * @param {!int} skinId the ID for the skin to change.
+     * @param {!string} svgData - new SVG to use.
+     * @param {?Array<number>} rotationCenter Optional: rotation center of the skin. If not supplied, the center of the
+     * skin will be used
+     */
+    updateSVGSkin (skinId, svgData, rotationCenter) {
+        if (this._allSkins[skinId] instanceof SVGSkin) {
+            this._allSkins[skinId].setSVG(svgData, rotationCenter);
+            return;
+        }
+
+        const newSkin = new SVGSkin(skinId, this);
+        newSkin.setSVG(svgData, rotationCenter);
+        const oldSkin = this._allSkins[skinId];
+        this._allSkins[skinId] = newSkin;
+
+        // Tell drawables to update
+        for (const drawable of this._allDrawables) {
+            if (drawable && drawable.skin === oldSkin) {
+                drawable.skin = newSkin;
+            }
+        }
+        oldSkin.dispose();
+    }
+
+    /**
+     * Update a skin using the text bubble svg creator.
+     * @param {!int} skinId the ID for the skin to change.
+     * @param {!string} type - either "say" or "think".
+     * @param {!string} text - the text for the bubble.
+     * @param {!boolean} pointsLeft - which side the bubble is pointing.
+     */
+    updateTextSkin (skinId, type, text, pointsLeft) {
+        const bubbleSvg = this._svgTextBubble.buildString(type, text, pointsLeft);
+        this.updateSVGSkin(skinId, bubbleSvg, [0, 0]);
+    }
+
 
     /**
      * Destroy an existing skin. Do not use the skin or its ID after calling this.
@@ -384,7 +446,7 @@ class RenderWebGL extends EventEmitter {
         if (mask3b) {
             extraUniforms = {
                 u_colorMask: [mask3b[0] / 255, mask3b[1] / 255, mask3b[2] / 255],
-                u_colorMaskTolerance: TOLERANCE_TOUCHING_COLOR / 255
+                u_colorMaskTolerance: TOLERANCE_TOUCHING_COLOR.Mask / 255
             };
         }
 
@@ -413,7 +475,7 @@ class RenderWebGL extends EventEmitter {
             gl.disable(gl.STENCIL_TEST);
         }
 
-        const pixels = new Uint8Array(bounds.width * bounds.height * 4);
+        const pixels = new Uint8Array(Math.floor(bounds.width * bounds.height * 4));
         gl.readPixels(0, 0, bounds.width, bounds.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
         if (this._debugCanvas) {
@@ -430,9 +492,9 @@ class RenderWebGL extends EventEmitter {
             const pixelDistanceG = Math.abs(pixels[pixelBase + 1] - color3b[1]);
             const pixelDistanceB = Math.abs(pixels[pixelBase + 2] - color3b[2]);
 
-            if (pixelDistanceR <= TOLERANCE_TOUCHING_COLOR &&
-                pixelDistanceG <= TOLERANCE_TOUCHING_COLOR &&
-                pixelDistanceB <= TOLERANCE_TOUCHING_COLOR) {
+            if (pixelDistanceR <= TOLERANCE_TOUCHING_COLOR.R &&
+                pixelDistanceG <= TOLERANCE_TOUCHING_COLOR.G &&
+                pixelDistanceB <= TOLERANCE_TOUCHING_COLOR.B) {
                 return true;
             }
         }
@@ -490,7 +552,7 @@ class RenderWebGL extends EventEmitter {
             gl.disable(gl.STENCIL_TEST);
         }
 
-        const pixels = new Uint8Array(bounds.width * bounds.height * 4);
+        const pixels = new Uint8Array(Math.floor(bounds.width * bounds.height * 4));
         gl.readPixels(0, 0, bounds.width, bounds.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
         if (this._debugCanvas) {
@@ -567,7 +629,7 @@ class RenderWebGL extends EventEmitter {
 
         this._drawThese(candidateIDs, ShaderManager.DRAW_MODE.silhouette, projection);
 
-        const pixels = new Uint8Array(touchWidth * touchHeight * 4);
+        const pixels = new Uint8Array(Math.floor(touchWidth * touchHeight * 4));
         gl.readPixels(0, 0, touchWidth, touchHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
         if (this._debugCanvas) {
@@ -623,15 +685,19 @@ class RenderWebGL extends EventEmitter {
         const drawable = this._allDrawables[drawableID];
         if (!drawable) return null;
 
+        // Convert client coordinates into absolute scratch units
+        const scratchX = this._nativeSize[0] * ((x / this._gl.canvas.clientWidth) - 0.5);
+        const scratchY = this._nativeSize[1] * ((y / this._gl.canvas.clientHeight) - 0.5);
+
         const gl = this._gl;
         twgl.bindFramebufferInfo(gl, this._queryBufferInfo);
 
         const bounds = drawable.getFastBounds();
         bounds.snapToInt();
 
-        // Translate input x and y to coordinates relative to the drawable
-        const pickX = x - ((this._nativeSize[0] / 2) + bounds.left);
-        const pickY = y - ((this._nativeSize[1] / 2) - bounds.top);
+        // Translate to scratch units relative to the drawable
+        const pickX = scratchX - bounds.left;
+        const pickY = scratchY + bounds.top;
 
         // Limit size of viewport to the bounds around the target Drawable,
         // and create the projection matrix for the draw.
@@ -648,7 +714,7 @@ class RenderWebGL extends EventEmitter {
             gl.enable(gl.BLEND);
         }
 
-        const data = new Uint8Array(bounds.width * bounds.height * 4);
+        const data = new Uint8Array(Math.floor(bounds.width * bounds.height * 4));
         gl.readPixels(0, 0, bounds.width, bounds.height, gl.RGBA, gl.UNSIGNED_BYTE, data);
 
         if (this._debugCanvas) {
@@ -672,11 +738,79 @@ class RenderWebGL extends EventEmitter {
             width: bounds.width,
             height: bounds.height,
             scratchOffset: [
-                (this._nativeSize[0] / 2) - x + drawable._position[0],
-                (this._nativeSize[1] / 2) - y - drawable._position[1]
+                -scratchX + drawable._position[0],
+                -scratchY - drawable._position[1]
             ],
             x: pickX,
             y: pickY
+        };
+    }
+
+    /**
+     * @typedef ColorExtraction
+     * @property {Uint8Array} data Raw pixel data for the drawable
+     * @property {int} width Drawable bounding box width
+     * @property {int} height Drawable bounding box height
+     * @property {object} color Color object with RGBA properties at picked location
+     */
+
+    /**
+     * Return drawable pixel data and color at a given position
+     * @param {int} x The client x coordinate of the picking location.
+     * @param {int} y The client y coordinate of the picking location.
+     * @param {int} radius The client radius to extract pixels with.
+     * @return {?ColorExtraction} Data about the picked color
+     */
+    extractColor (x, y, radius) {
+        const scratchX = Math.round(this._nativeSize[0] * ((x / this._gl.canvas.clientWidth) - 0.5));
+        const scratchY = Math.round(-this._nativeSize[1] * ((y / this._gl.canvas.clientHeight) - 0.5));
+
+        const gl = this._gl;
+        twgl.bindFramebufferInfo(gl, this._queryBufferInfo);
+
+        const bounds = new Rectangle();
+        bounds.initFromBounds(scratchX - radius, scratchX + radius, scratchY - radius, scratchY + radius);
+
+        const pickX = scratchX - bounds.left;
+        const pickY = bounds.top - scratchY;
+
+        gl.viewport(0, 0, bounds.width, bounds.height);
+        const projection = twgl.m4.ortho(bounds.left, bounds.right, bounds.top, bounds.bottom, -1, 1);
+
+        gl.clearColor.apply(gl, this._backgroundColor);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        this._drawThese(this._drawList, ShaderManager.DRAW_MODE.default, projection);
+
+        const data = new Uint8Array(Math.floor(bounds.width * bounds.height * 4));
+        gl.readPixels(0, 0, bounds.width, bounds.height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+        const pixelBase = Math.floor(4 * ((pickY * bounds.width) + pickX));
+        const color = {
+            r: data[pixelBase],
+            g: data[pixelBase + 1],
+            b: data[pixelBase + 2],
+            a: data[pixelBase + 3]
+        };
+
+        if (this._debugCanvas) {
+            this._debugCanvas.width = bounds.width;
+            this._debugCanvas.height = bounds.height;
+            const ctx = this._debugCanvas.getContext('2d');
+            const imageData = ctx.createImageData(bounds.width, bounds.height);
+            imageData.data.set(data);
+            ctx.putImageData(imageData, 0, 0);
+            ctx.strokeStyle = 'black';
+            ctx.fillStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${color.a})`;
+            ctx.rect(pickX - 4, pickY - 4, 8, 8);
+            ctx.fill();
+            ctx.stroke();
+        }
+
+        return {
+            data: data,
+            width: bounds.width,
+            height: bounds.height,
+            color: color
         };
     }
 
@@ -865,7 +999,7 @@ class RenderWebGL extends EventEmitter {
             gl.enable(gl.BLEND);
         }
 
-        const stampPixels = new Uint8Array(bounds.width * bounds.height * 4);
+        const stampPixels = new Uint8Array(Math.floor(bounds.width * bounds.height * 4));
         gl.readPixels(0, 0, bounds.width, bounds.height, gl.RGBA, gl.UNSIGNED_BYTE, stampPixels);
 
         const stampCanvas = this._tempCanvas;
@@ -1041,7 +1175,7 @@ class RenderWebGL extends EventEmitter {
             {extraUniforms: {u_modelMatrix: modelMatrix}}
         );
 
-        const pixels = new Uint8Array(width * height * 4);
+        const pixels = new Uint8Array(Math.floor(width * height * 4));
         gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
         // Known boundary points on left/right edges of pixels.

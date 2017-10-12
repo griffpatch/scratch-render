@@ -8,7 +8,7 @@ const base = {
         host: '0.0.0.0',
         port: process.env.PORT || 8361
     },
-    devtool: 'source-map',
+    devtool: 'cheap-module-source-map',
     module: {
         rules: [
             {
@@ -20,6 +20,10 @@ const base = {
                 options: {
                     presets: ['es2015']
                 }
+            },
+            {
+                test: /node_modules\/(linebreak|grapheme-breaker)\/.*\.js$/,
+                loader: 'ify-loader'
             }
         ]
     },
